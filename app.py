@@ -4,6 +4,8 @@ import tempfile
 from pathlib import Path
 import io
 from PIL import Image
+import subprocess
+import shutil
 
 # PowerPoint to PDF imports
 try:
@@ -79,8 +81,103 @@ if 'last_dpi' not in st.session_state:
 if 'last_compression' not in st.session_state:
     st.session_state.last_compression = 'tiff_deflate'
 
-def convert_pptx_to_pdf(uploaded_file):
-    """Convert PowerPoint file to PDF"""
+def convert_pptx_to_pdf_libreoffice(uploaded_file):
+    """Convert PowerPoint file to PDF using LibreOffice (better visual rendering)"""
+    try:
+        import subprocess
+        import shutil
+        
+        # Check if LibreOffice is available
+        libreoffice_path = shutil.which('libreoffice') or shutil.which('soffice')
+        if not libreoffice_path:
+            raise ValueError("LibreOffice is not installed. Install it with: brew install --cask libreoffice")
+        
+        # Reset file pointer
+        uploaded_file.seek(0)
+        
+        # Create temporary directory for conversion
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Save uploaded file
+            input_path = os.path.join(tmp_dir, uploaded_file.name)
+            with open(input_path, 'wb') as f:
+                f.write(uploaded_file.read())
+            
+            # Convert using LibreOffice headless mode
+            output_dir = tmp_dir
+            cmd = [
+                libreoffice_path,
+                '--headless',
+                '--convert-to', 'pdf',
+                '--outdir', output_dir,
+                input_path
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            
+            if result.returncode != 0:
+                raise ValueError(f"LibreOffice conversion failed: {result.stderr}")
+            
+            # Find the generated PDF
+            pdf_path = os.path.join(output_dir, Path(uploaded_file.name).stem + '.pdf')
+            if not os.path.exists(pdf_path):
+                raise ValueError("PDF file was not generated")
+            
+            # Read PDF
+            with open(pdf_path, 'rb') as f:
+                pdf_bytes = f.read()
+            
+            return pdf_bytes
+    
+    except Exception as e:
+        st.error(f"Error converting with LibreOffice: {str(e)}")
+        return None
+
+def convert_pptx_to_pdf_api(uploaded_file, api_key=None):
+    """Convert PowerPoint file to PDF using external API service"""
+    try:
+        import requests
+        
+        if not api_key:
+            # Try using a free service or show instructions
+            st.warning("⚠️ API key not provided. Using LibreOffice method instead.")
+            return convert_pptx_to_pdf_libreoffice(uploaded_file)
+        
+        # Example using CloudConvert API (you can replace with any API service)
+        uploaded_file.seek(0)
+        files = {'file': (uploaded_file.name, uploaded_file.read(), 'application/vnd.openxmlformats-officedocument.presentationml.presentation')}
+        
+        # This is a placeholder - replace with actual API endpoint
+        # For example, CloudConvert: https://api.cloudconvert.com/v2/convert
+        response = requests.post(
+            'https://api.cloudconvert.com/v2/convert',
+            headers={'Authorization': f'Bearer {api_key}'},
+            files=files,
+            data={'format': 'pdf'}
+        )
+        
+        if response.status_code != 200:
+            raise ValueError(f"API conversion failed: {response.text}")
+        
+        return response.content
+    
+    except Exception as e:
+        st.error(f"Error converting with API: {str(e)}")
+        return None
+
+def convert_pptx_to_pdf(uploaded_file, method='text'):
+    """Convert PowerPoint file to PDF using specified method"""
+    if method == 'api':
+        # Check for API key in session state or environment
+        api_key = st.session_state.get('api_key', None) or os.getenv('CONVERSION_API_KEY')
+        return convert_pptx_to_pdf_api(uploaded_file, api_key)
+    elif method == 'libreoffice':
+        return convert_pptx_to_pdf_libreoffice(uploaded_file)
+    else:
+        # Default text extraction method
+        return convert_pptx_to_pdf_text(uploaded_file)
+
+def convert_pptx_to_pdf_text(uploaded_file):
+    """Convert PowerPoint file to PDF using text extraction (original method)"""
     try:
         # Reset file pointer
         uploaded_file.seek(0)
@@ -253,28 +350,38 @@ if tool_choice == "PowerPoint to PDF":
         st.error("⚠️ Required libraries not installed. Please install python-pptx and reportlab.")
         st.code("pip install python-pptx reportlab", language="bash")
     else:
-        st.markdown("""
-        <div class="info-box">
-            <strong>📋 Instructions:</strong><br>
-            1. Upload a .pptx file (recommended) or .ppt file<br>
-            2. Click "Convert to PDF"<br>
-            3. Preview and download your PDF<br>
-            <small>Note: .pptx files work best. For .ppt files, convert to .pptx first for optimal results.</small>
-        </div>
-        """, unsafe_allow_html=True)
-        
         uploaded_file = st.file_uploader(
             "Choose a PowerPoint file",
             type=['ppt', 'pptx'],
             help="Upload a .ppt or .pptx file to convert to PDF"
         )
         
-            if uploaded_file is not None:
+        if uploaded_file is not None:
             # Show file info
             uploaded_file.seek(0)
             file_size = len(uploaded_file.read())
             uploaded_file.seek(0)
             st.info(f"📁 File: {uploaded_file.name} ({file_size / 1024:.2f} KB)")
+            
+            # Conversion method selector
+            conversion_methods = ['Text Extraction', 'LibreOffice (API)', 'External API']
+            method = st.selectbox(
+                "Conversion Method",
+                conversion_methods,
+                help="Text Extraction: Fast, extracts text only. LibreOffice: Better visual rendering (requires LibreOffice). External API: Uses cloud service (requires API key)."
+            )
+            
+            # API key input if External API is selected
+            api_key = None
+            if method == 'External API':
+                api_key = st.text_input(
+                    "API Key (optional)",
+                    type="password",
+                    help="Enter your conversion API key. Leave empty to use LibreOffice method instead.",
+                    value=st.session_state.get('api_key', '')
+                )
+                if api_key:
+                    st.session_state['api_key'] = api_key
             
             col1, col2 = st.columns(2)
             
@@ -282,7 +389,15 @@ if tool_choice == "PowerPoint to PDF":
                 if st.button("🔄 Convert to PDF", type="primary"):
                     with st.spinner("Converting PowerPoint to PDF... This may take a moment."):
                         uploaded_file.seek(0)
-                        pdf_bytes = convert_pptx_to_pdf(uploaded_file)
+                        
+                        # Map method name to function parameter
+                        method_param = 'text'
+                        if method == 'LibreOffice (API)':
+                            method_param = 'libreoffice'
+                        elif method == 'External API':
+                            method_param = 'api'
+                        
+                        pdf_bytes = convert_pptx_to_pdf(uploaded_file, method=method_param)
                         
                         if pdf_bytes:
                             st.session_state['pdf_output'] = pdf_bytes
@@ -321,17 +436,6 @@ elif tool_choice == "PDF to TIFF":
         - **Windows:** Download from [poppler-windows](https://github.com/oschwartz10612/poppler-windows/releases)
         """)
     else:
-        st.markdown("""
-        <div class="info-box">
-            <strong>📋 Instructions:</strong><br>
-            1. Upload a .pdf file<br>
-            2. Select DPI (higher = better quality, larger file)<br>
-            3. Choose compression method<br>
-            4. Click "Convert to TIFF"<br>
-            5. Preview and download your TIFF
-        </div>
-        """, unsafe_allow_html=True)
-        
         uploaded_file = st.file_uploader(
             "Choose a PDF file",
             type=['pdf'],
@@ -349,10 +453,11 @@ elif tool_choice == "PDF to TIFF":
             col1, col2 = st.columns(2)
             
             with col1:
+                dpi_options = [150, 300, 600, 700, 800, 900, 1000, 1100, 1200]
                 dpi = st.selectbox(
                     "DPI (Resolution)",
-                    [150, 300, 600],
-                    index=[150, 300, 600].index(st.session_state.last_dpi) if st.session_state.last_dpi in [150, 300, 600] else 1,
+                    dpi_options,
+                    index=dpi_options.index(st.session_state.last_dpi) if st.session_state.last_dpi in dpi_options else 1,
                     help="Higher DPI = better quality but larger file size. 300 DPI is recommended for most uses."
                 )
                 st.session_state.last_dpi = dpi
