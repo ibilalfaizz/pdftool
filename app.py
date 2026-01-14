@@ -24,7 +24,7 @@ except ImportError:
 
 # Page configuration
 st.set_page_config(
-    page_title="File Format Converter",
+    page_title="Ijazul Haq | File Converter",
     page_icon="🔄",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -70,8 +70,9 @@ st.markdown("""
 # Header
 st.markdown("""
     <div class="main-header">
-        <h1>🔄 File Format Converter</h1>
-        <p>Convert PowerPoint to PDF and PDF to TIFF with ease</p>
+        <h1>Ijazul Haq | File Converter</h1>
+        <p>Comparative & Evolutionary Genomics Lab</p>
+        <p style="font-size: 0.9em; margin-top: 0.5rem;">Convert PowerPoint to PDF and PDF to TIFF with ease</p>
     </div>
 """, unsafe_allow_html=True)
 
@@ -273,11 +274,84 @@ def convert_pptx_to_pdf_text(uploaded_file):
         st.error(f"Details: {traceback.format_exc()}")
         return None
 
+def check_poppler_available():
+    """Check if Poppler is available and return path if found"""
+    try:
+        import subprocess
+        # Check environment variable first
+        poppler_path_env = os.getenv('POPPLER_PATH')
+        if poppler_path_env:
+            pdftoppm_path = os.path.join(poppler_path_env, 'pdftoppm')
+            if os.path.exists(pdftoppm_path):
+                return pdftoppm_path
+        
+        # Try common Poppler paths
+        poppler_paths = [
+            shutil.which('pdftoppm'),
+            shutil.which('pdftocairo'),
+            '/usr/bin/pdftoppm',
+            '/usr/local/bin/pdftoppm',
+            '/opt/homebrew/bin/pdftoppm',  # macOS Apple Silicon
+            '/app/.apt/usr/bin/pdftoppm',  # Streamlit Cloud
+        ]
+        
+        for path in poppler_paths:
+            if path and os.path.exists(path):
+                # Test if it works
+                try:
+                    result = subprocess.run([path, '-v'], capture_output=True, timeout=5, stderr=subprocess.STDOUT)
+                    if result.returncode == 0 or 'version' in result.stdout.decode().lower() or 'version' in result.stderr.decode().lower():
+                        return path
+                except:
+                    continue
+        
+        return None
+    except:
+        return None
+
 def convert_pdf_to_tiff(pdf_bytes, dpi=300, compression='tiff_deflate'):
     """Convert PDF to multi-page TIFF"""
     try:
+        # Check Poppler availability first
+        poppler_path = check_poppler_available()
+        if not poppler_path:
+            error_msg = """
+            **Poppler is not installed or not in PATH.**
+            
+            **For local development:**
+            - macOS: `brew install poppler`
+            - Linux: `sudo apt-get install poppler-utils`
+            - Windows: Download from [poppler-windows](https://github.com/oschwartz10612/poppler-windows/releases)
+            
+            **For cloud deployments (Streamlit Cloud, Heroku, etc.):**
+            Poppler needs to be installed in your deployment environment. Options:
+            1. Add Poppler to your buildpack/dockerfile
+            2. Use a Docker image with Poppler pre-installed
+            3. Set POPPLER_PATH environment variable if Poppler is in a custom location
+            """
+            st.error(error_msg)
+            return None
+        
         # Convert PDF to images
-        images = convert_from_bytes(pdf_bytes, dpi=dpi)
+        # Try to use poppler_path if available
+        poppler_dir = None
+        if poppler_path:
+            poppler_dir = os.path.dirname(poppler_path)
+            # If poppler_path is a directory, use it directly
+            if os.path.isdir(poppler_path):
+                poppler_dir = poppler_path
+        
+        try:
+            if poppler_dir:
+                images = convert_from_bytes(pdf_bytes, dpi=dpi, poppler_path=poppler_dir)
+            else:
+                images = convert_from_bytes(pdf_bytes, dpi=dpi)
+        except Exception as e:
+            # Fallback to default path
+            try:
+                images = convert_from_bytes(pdf_bytes, dpi=dpi)
+            except Exception as e2:
+                raise e  # Raise original error
         
         if not images:
             return None
@@ -311,18 +385,57 @@ def convert_pdf_to_tiff(pdf_bytes, dpi=300, compression='tiff_deflate'):
         return tiff_buffer.getvalue()
     
     except Exception as e:
-        st.error(f"Error converting PDF to TIFF: {str(e)}")
+        error_str = str(e)
+        if "poppler" in error_str.lower() or "page count" in error_str.lower():
+            error_msg = f"""
+            **Poppler Error: {error_str}**
+            
+            Poppler is required for PDF to TIFF conversion but is not properly configured.
+            
+            **Troubleshooting:**
+            1. Check if Poppler is installed: `pdftoppm -v` (should show version)
+            2. For cloud deployments, ensure Poppler is included in your deployment configuration
+            3. Set POPPLER_PATH environment variable if Poppler is in a non-standard location
+            4. Check that Poppler binaries are executable
+            
+            **For Streamlit Cloud:**
+            - Add Poppler installation to your `packages.txt` or use a Dockerfile
+            - Example packages.txt: `poppler-utils`
+            """
+            st.error(error_msg)
+        else:
+            st.error(f"Error converting PDF to TIFF: {error_str}")
         return None
 
 def get_pdf_preview(pdf_bytes):
     """Get first page of PDF as image for preview"""
     try:
-        images = convert_from_bytes(pdf_bytes, dpi=150, first_page=1, last_page=1)
+        poppler_path = check_poppler_available()
+        poppler_dir = None
+        if poppler_path:
+            poppler_dir = os.path.dirname(poppler_path)
+            if os.path.isdir(poppler_path):
+                poppler_dir = poppler_path
+        
+        try:
+            if poppler_dir:
+                images = convert_from_bytes(
+                    pdf_bytes, 
+                    dpi=150, 
+                    first_page=1, 
+                    last_page=1,
+                    poppler_path=poppler_dir
+                )
+            else:
+                images = convert_from_bytes(pdf_bytes, dpi=150, first_page=1, last_page=1)
+        except:
+            images = convert_from_bytes(pdf_bytes, dpi=150, first_page=1, last_page=1)
+        
         if images:
             return images[0]
         return None
     except Exception as e:
-        st.warning(f"Could not generate PDF preview: {str(e)}")
+        # Don't show error for preview failures, just return None
         return None
 
 def get_tiff_preview(tiff_bytes):
@@ -436,6 +549,27 @@ elif tool_choice == "PDF to TIFF":
         - **Windows:** Download from [poppler-windows](https://github.com/oschwartz10612/poppler-windows/releases)
         """)
     else:
+        # Check Poppler status
+        poppler_status = check_poppler_available()
+        if poppler_status:
+            st.success(f"✅ Poppler is available at: {poppler_status}")
+        else:
+            st.warning("⚠️ Poppler not detected. PDF to TIFF conversion may not work. See instructions below.")
+            with st.expander("📋 How to install Poppler for cloud deployments"):
+                st.markdown("""
+                **For Streamlit Cloud:**
+                1. Create a `packages.txt` file in your repo root with:
+                   ```
+                   poppler-utils
+                   ```
+                2. Or use a Dockerfile with Poppler installed
+                
+                **For other platforms:**
+                - **Heroku:** Add Poppler buildpack
+                - **Docker:** Use base image with Poppler or install in Dockerfile
+                - **Linux VPS:** `sudo apt-get install poppler-utils`
+                """)
+        
         uploaded_file = st.file_uploader(
             "Choose a PDF file",
             type=['pdf'],
@@ -511,7 +645,9 @@ elif tool_choice == "PDF to TIFF":
 st.markdown("""
     <div class="footer">
         <hr>
-        <p>© 2024 File Format Converter | Built with Streamlit</p>
+        <p><strong>Ijazul Haq | File Converter</strong></p>
+        <p>Comparative & Evolutionary Genomics Lab</p>
+        <p style="font-size: 0.8em; margin-top: 0.5rem;">© 2024 | Built with Streamlit</p>
         <p style="font-size: 0.8em;">Supports: PowerPoint (PPT/PPTX) → PDF | PDF → TIFF</p>
     </div>
 """, unsafe_allow_html=True)

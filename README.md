@@ -63,6 +63,28 @@ sudo yum install poppler-utils
 3. Add the `bin` folder to your system PATH
    - Or set the environment variable: `POPPLER_PATH=C:\path\to\poppler\bin`
 
+### 3. Cloud Deployment (Streamlit Cloud, Heroku, etc.)
+
+For cloud deployments, Poppler must be installed in the deployment environment:
+
+#### Streamlit Cloud
+1. Create a `packages.txt` file in your repository root with:
+   ```
+   poppler-utils
+   ```
+2. Streamlit Cloud will automatically install Poppler during deployment
+3. The app will automatically detect Poppler in the cloud environment
+
+#### Other Platforms
+- **Heroku:** Add the Poppler buildpack: `heroku buildpacks:add --index 1 https://github.com/bobey/heroku-buildpack-poppler.git`
+- **Docker:** Install Poppler in your Dockerfile:
+  ```dockerfile
+  RUN apt-get update && apt-get install -y poppler-utils
+  ```
+- **Linux VPS:** `sudo apt-get install poppler-utils`
+
+**Note:** If Poppler is installed in a non-standard location, set the `POPPLER_PATH` environment variable to point to the Poppler bin directory.
+
 ## Usage
 
 ### Running the Application
