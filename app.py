@@ -72,6 +72,7 @@ st.markdown("""
     <div class="main-header">
         <h1>Ijazul Haq | File Converter</h1>
         <p>Comparative & Evolutionary Genomics Lab</p>
+        <p style="font-size: 0.85em; margin-top: 0.3rem;">Dr. Amir Ali Abbasi | Principal Investigator of <a href="https://www.pahgncb.com/genomedb/public/" target="_blank" style="color: #fff; text-decoration: underline;">PAHG database</a></p>
         <p style="font-size: 0.9em; margin-top: 0.5rem;">Convert PowerPoint to PDF and PDF to TIFF with ease</p>
     </div>
 """, unsafe_allow_html=True)
@@ -283,7 +284,14 @@ def check_poppler_available():
         if poppler_path_env:
             pdftoppm_path = os.path.join(poppler_path_env, 'pdftoppm')
             if os.path.exists(pdftoppm_path):
-                return pdftoppm_path
+                # Test if it works
+                try:
+                    result = subprocess.run([pdftoppm_path, '-v'], capture_output=True, timeout=5)
+                    output = (result.stdout.decode() + result.stderr.decode()).lower()
+                    if 'version' in output or result.returncode == 0:
+                        return pdftoppm_path
+                except:
+                    pass
         
         # Try common Poppler paths
         poppler_paths = [
@@ -293,44 +301,77 @@ def check_poppler_available():
             '/usr/local/bin/pdftoppm',
             '/opt/homebrew/bin/pdftoppm',  # macOS Apple Silicon
             '/app/.apt/usr/bin/pdftoppm',  # Streamlit Cloud
+            '/app/.apt/usr/bin/pdftocairo',  # Streamlit Cloud alternative
+            '/usr/bin/pdftocairo',  # Alternative binary
         ]
         
         for path in poppler_paths:
             if path and os.path.exists(path):
-                # Test if it works
+                # Test if it works - try multiple ways
                 try:
-                    result = subprocess.run([path, '-v'], capture_output=True, timeout=5, stderr=subprocess.STDOUT)
-                    if result.returncode == 0 or 'version' in result.stdout.decode().lower() or 'version' in result.stderr.decode().lower():
+                    # Try with -v flag
+                    result = subprocess.run([path, '-v'], capture_output=True, timeout=5)
+                    output = (result.stdout.decode() + result.stderr.decode()).lower()
+                    if 'version' in output or result.returncode == 0:
                         return path
-                except:
-                    continue
+                except Exception as e1:
+                    try:
+                        # Try with --version flag
+                        result = subprocess.run([path, '--version'], capture_output=True, timeout=5)
+                        output = (result.stdout.decode() + result.stderr.decode()).lower()
+                        if 'version' in output or result.returncode == 0:
+                            return path
+                    except:
+                        # If both fail but file exists, still return it (might work for conversion)
+                        # Only do this if it's from shutil.which (in PATH)
+                        if path == shutil.which('pdftoppm') or path == shutil.which('pdftocairo'):
+                            return path
+                        continue
         
         return None
-    except:
+    except Exception as e:
+        # If there's an error, try a simple which check as fallback
+        try:
+            simple_path = shutil.which('pdftoppm')
+            if simple_path and os.path.exists(simple_path):
+                return simple_path
+        except:
+            pass
         return None
 
 def convert_pdf_to_tiff(pdf_bytes, dpi=300, compression='tiff_deflate'):
     """Convert PDF to multi-page TIFF"""
     try:
-        # Check Poppler availability first
+        # Check Poppler availability first (but don't fail if detection fails on cloud)
         poppler_path = check_poppler_available()
+        
+        # On Streamlit Cloud, even if detection fails, try conversion anyway
+        # since Poppler might be installed but subprocess calls are restricted
         if not poppler_path:
-            error_msg = """
-            **Poppler is not installed or not in PATH.**
+            # Check if we're likely on Streamlit Cloud
+            is_streamlit_cloud = os.path.exists('/app/.apt/usr/bin/pdftoppm') or os.path.exists('/app/.apt/usr/bin/pdftocairo')
             
-            **For local development:**
-            - macOS: `brew install poppler`
-            - Linux: `sudo apt-get install poppler-utils`
-            - Windows: Download from [poppler-windows](https://github.com/oschwartz10612/poppler-windows/releases)
-            
-            **For cloud deployments (Streamlit Cloud, Heroku, etc.):**
-            Poppler needs to be installed in your deployment environment. Options:
-            1. Add Poppler to your buildpack/dockerfile
-            2. Use a Docker image with Poppler pre-installed
-            3. Set POPPLER_PATH environment variable if Poppler is in a custom location
-            """
-            st.error(error_msg)
-            return None
+            if not is_streamlit_cloud:
+                error_msg = """
+                **Poppler is not installed or not in PATH.**
+                
+                **For local development:**
+                - macOS: `brew install poppler`
+                - Linux: `sudo apt-get install poppler-utils`
+                - Windows: Download from [poppler-windows](https://github.com/oschwartz10612/poppler-windows/releases)
+                
+                **For cloud deployments (Streamlit Cloud, Heroku, etc.):**
+                Poppler needs to be installed in your deployment environment. Options:
+                1. Add Poppler to your buildpack/dockerfile
+                2. Use a Docker image with Poppler pre-installed
+                3. Set POPPLER_PATH environment variable if Poppler is in a custom location
+                """
+                st.error(error_msg)
+                return None
+            else:
+                # On Streamlit Cloud, try anyway - Poppler might be installed but detection failed
+                st.info("⚠️ Poppler detection failed, but attempting conversion anyway (Poppler may still be available)...")
+                poppler_path = None  # Will use default path
         
         # Convert PDF to images
         # Try to use poppler_path if available
@@ -341,17 +382,28 @@ def convert_pdf_to_tiff(pdf_bytes, dpi=300, compression='tiff_deflate'):
             if os.path.isdir(poppler_path):
                 poppler_dir = poppler_path
         
+        # For Streamlit Cloud, try common paths even if detection failed
+        if not poppler_dir:
+            streamlit_cloud_paths = ['/app/.apt/usr/bin', '/usr/bin']
+            for potential_dir in streamlit_cloud_paths:
+                if os.path.exists(os.path.join(potential_dir, 'pdftoppm')):
+                    poppler_dir = potential_dir
+                    break
+        
         try:
             if poppler_dir:
                 images = convert_from_bytes(pdf_bytes, dpi=dpi, poppler_path=poppler_dir)
             else:
                 images = convert_from_bytes(pdf_bytes, dpi=dpi)
         except Exception as e:
-            # Fallback to default path
-            try:
-                images = convert_from_bytes(pdf_bytes, dpi=dpi)
-            except Exception as e2:
-                raise e  # Raise original error
+            # Fallback: try Streamlit Cloud path explicitly
+            if not poppler_dir and os.path.exists('/app/.apt/usr/bin/pdftoppm'):
+                try:
+                    images = convert_from_bytes(pdf_bytes, dpi=dpi, poppler_path='/app/.apt/usr/bin')
+                except:
+                    raise e
+            else:
+                raise e
         
         if not images:
             return None
@@ -552,22 +604,29 @@ elif tool_choice == "PDF to TIFF":
         # Check Poppler status
         poppler_status = check_poppler_available()
         if poppler_status:
-            st.success(f"✅ Poppler is available at: {poppler_status}")
+            st.success(f"✅ Poppler is available")
         else:
-            st.warning("⚠️ Poppler not detected. PDF to TIFF conversion may not work. See instructions below.")
-            with st.expander("📋 How to install Poppler for cloud deployments"):
+            # On Streamlit Cloud, try to be more lenient - the conversion might still work
+            # even if detection fails due to subprocess restrictions
+            st.info("ℹ️ Poppler detection: Checking availability...")
+            st.info("""
+            **Note:** If you're on Streamlit Cloud and have `packages.txt` with `poppler-utils`, 
+            Poppler should be installed. The conversion will be attempted even if detection shows a warning.
+            """)
+            with st.expander("📋 Troubleshooting Poppler on Streamlit Cloud"):
                 st.markdown("""
                 **For Streamlit Cloud:**
-                1. Create a `packages.txt` file in your repo root with:
+                1. Ensure `packages.txt` exists in your repo root with:
                    ```
                    poppler-utils
                    ```
-                2. Or use a Dockerfile with Poppler installed
+                2. Redeploy your app after adding/updating packages.txt
+                3. Poppler should be installed at `/app/.apt/usr/bin/pdftoppm`
                 
-                **For other platforms:**
-                - **Heroku:** Add Poppler buildpack
-                - **Docker:** Use base image with Poppler or install in Dockerfile
-                - **Linux VPS:** `sudo apt-get install poppler-utils`
+                **If conversion still fails:**
+                - Check Streamlit Cloud logs for Poppler installation errors
+                - Verify packages.txt is in the root directory (same level as app.py)
+                - Try redeploying the app
                 """)
         
         uploaded_file = st.file_uploader(
